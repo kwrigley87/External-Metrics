@@ -5,10 +5,9 @@
   <title>Genesys External Metrics CSV Uploader</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script src="https://cdn.tailwindcss.com"></script>
-
   <!-- Genesys Cloud Platform Client SDK -->
   <script src="https://sdk-cdn.mypurecloud.com/javascript/171.0.0/purecloud-platform-client-v2.min.js"></script>
-  <!-- Papa Parse for CSV -->
+  <!-- Papa Parse -->
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 </head>
 <body class="min-h-screen bg-gray-50 text-gray-900">
@@ -18,7 +17,7 @@
       <span class="text-xs text-gray-500">POST /api/v2/employeeperformance/externalmetrics/data</span>
     </header>
 
-    <!-- Auth: region + client id -->
+    <!-- Region + Client Id -->
     <section class="mb-4 grid md:grid-cols-3 gap-4">
       <div>
         <label class="block text-sm font-medium mb-1">Region</label>
@@ -39,13 +38,13 @@
       <div class="md:col-span-2">
         <label class="block text-sm font-medium mb-1">OAuth Client Id (public)</label>
         <input id="clientId" class="w-full border rounded p-2" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-        <p class="text-xs text-gray-500 mt-1">Safe to expose in the browser. Never include a client secret.</p>
+        <p class="text-xs text-gray-500 mt-1">Safe to expose in browser. Never put a client secret in front-end code.</p>
       </div>
     </section>
 
     <div class="flex gap-2 items-center mb-6">
-      <button id="btnLogin" class="px-4 py-2 rounded bg-black text-white">Sign in</button>
-      <button id="btnLogout" class="px-4 py-2 rounded bg-gray-200">Sign out</button>
+      <button id="btnLogin" type="button" class="px-4 py-2 rounded bg-black text-white">Sign in</button>
+      <button id="btnLogout" type="button" class="px-4 py-2 rounded bg-gray-200">Sign out</button>
       <div class="ml-auto text-sm text-gray-700">
         <span id="whoami"></span>
       </div>
@@ -55,7 +54,10 @@
     <section class="mb-4">
       <label class="block text-sm font-medium mb-1">CSV file</label>
       <input id="csvFile" type="file" accept=".csv" class="block w-full text-sm" />
-      <p class="text-xs text-gray-500 mt-1">Header: metricId,userId,email,value,type,dateOccurred (YYYY-MM-DD). Provide userId OR email, not both.</p>
+      <p class="text-xs text-gray-500 mt-1">
+        Header: <code>metricId,userId,email,value,type,dateOccurred</code>.
+        <strong>type</strong>: <code>total</code> (default) or <code>cumulative</code>. Provide <em>userId</em> OR <em>email</em>, not both. Date as <code>YYYY-MM-DD</code>. :contentReference[oaicite:2]{index=2}
+      </p>
     </section>
 
     <!-- Controls -->
@@ -63,11 +65,12 @@
       <div>
         <label class="block text-sm font-medium mb-1">Max concurrency (1–5)</label>
         <input id="concurrency" type="number" min="1" max="5" value="3" class="w-full border rounded p-2" />
+        <p class="text-xs text-gray-500 mt-1"># of 100-row batches sent in parallel. Default 3. :contentReference[oaicite:3]{index=3}</p>
       </div>
       <div class="md:col-span-3 flex items-end gap-2">
-        <button id="btnValidate" class="px-4 py-2 rounded bg-blue-600 text-white">Validate CSV</button>
-        <button id="btnUpload" class="px-4 py-2 rounded bg-green-600 text-white" disabled>Upload to Genesys</button>
-        <button id="btnCancel" class="px-4 py-2 rounded bg-gray-200" disabled>Cancel</button>
+        <button id="btnValidate" type="button" class="px-4 py-2 rounded bg-blue-600 text-white">Validate CSV</button>
+        <button id="btnUpload"   type="button" class="px-4 py-2 rounded bg-green-600 text-white" disabled>Upload to Genesys</button>
+        <button id="btnCancel"   type="button" class="px-4 py-2 rounded bg-gray-200" disabled>Cancel</button>
       </div>
     </section>
 
@@ -81,45 +84,67 @@
     </section>
 
     <!-- Preview / Log -->
-    <details class="mt-4">
+    <details class="mt-4" open>
       <summary class="cursor-pointer font-medium">Preview & Log</summary>
       <pre id="log" class="mt-2 p-3 bg-white border rounded overflow-auto text-xs h-64"></pre>
     </details>
   </div>
 
 <script>
-(() => {
-  // ===== Genesys SDK setup =====
+document.addEventListener('DOMContentLoaded', () => {
+  // Defensive: surface any runtime error in the on-page log
+  window.onerror = (msg, src, line, col, err) => {
+    const details = [msg, src, line + ':' + col, err && err.stack].filter(Boolean).join(' | ');
+    log('JS Error → ' + details);
+  };
+
+  // ===== Genesys SDK presence check =====
+  if (!window.platformClient || !window.platformClient.ApiClient) {
+    log('ERROR: Genesys SDK failed to load. Check network/CSP and the script tag for the SDK.');
+    alert('Genesys SDK failed to load (see log).');
+  }
+
   const platformClient = window.platformClient;
   const client = platformClient.ApiClient.instance;
   const UsersApi = new platformClient.UsersApi();
 
-  // persist region & clientId
+  // Persist region & clientId
   const LS_KEYS = { region: 'extm_region', clientId: 'extm_clientId' };
-  document.getElementById('region').value = localStorage.getItem(LS_KEYS.region) || document.getElementById('region').value;
-  document.getElementById('clientId').value = new URLSearchParams(location.search).get('clientId')
-                                            || localStorage.getItem(LS_KEYS.clientId) || '';
+  const regionEl   = document.getElementById('region');
+  const clientEl   = document.getElementById('clientId');
+  regionEl.value   = localStorage.getItem(LS_KEYS.region)  || regionEl.value;
+  clientEl.value   = new URLSearchParams(location.search).get('clientId')
+                  || localStorage.getItem(LS_KEYS.clientId) || '';
 
-  let authedUser = null;
-  let parsedRows = [];
+  let authedUser   = null;
+  let parsedRows   = [];
   let cancelRequested = false;
 
-  // ===== Auth (same pattern as your External Interactions app) =====
+  // ===== Auth (implicit grant) =====
   async function login() {
-    const region = document.getElementById('region').value.trim();
-    const clientId = document.getElementById('clientId').value.trim();
+    const region   = regionEl.value.trim();
+    const clientId = clientEl.value.trim();
     if (!clientId) return alert('Enter OAuth Client Id');
 
+    // persist
     localStorage.setItem(LS_KEYS.region, region);
     localStorage.setItem(LS_KEYS.clientId, clientId);
 
     client.setEnvironment(region);
-    // Implicit grant — same approach you used previously
-    await client.loginImplicitGrant(clientId, window.location.href, { state: 'ext-metrics' });
 
-    authedUser = await UsersApi.getUsersMe({});
-    document.getElementById('whoami').textContent = `Welcome, ${authedUser.name}`;
-    log(`Auth OK for ${authedUser.name}`);
+    // Use a fixed redirect to avoid querystring mismatches on OAuth config
+    const redirectUri = `${location.origin}${location.pathname}`;
+    log('Auth starting… redirectUri=' + redirectUri);
+
+    try {
+      await client.loginImplicitGrant(clientId, redirectUri, { state: 'ext-metrics' });
+      authedUser = await UsersApi.getUsersMe({});
+      document.getElementById('whoami').textContent = `Welcome, ${authedUser.name}`;
+      log(`Auth OK for ${authedUser.name}`);
+    } catch (e) {
+      log('Auth FAILED → ' + (e && e.message ? e.message : e));
+      alert('Sign-in failed. Check OAuth Redirect URI in Admin > Integrations > OAuth (must match this page URL). See log.');
+    }
   }
 
   async function logout() {
@@ -134,18 +159,22 @@
 
   // ===== CSV parse & validate =====
   document.getElementById('btnValidate').addEventListener('click', async () => {
-    const file = document.getElementById('csvFile').files?.[0];
+    const file = document.getElementById('csvFile').files && document.getElementById('csvFile').files[0];
     if (!file) return alert('Choose a CSV file first.');
-
-    parsedRows = await parseCsv(file);
-    const issues = validateRows(parsedRows);
-    if (issues.length) {
-      log('Validation issues:\n' + issues.join('\n'));
-      alert(`Found ${issues.length} validation issue(s). See log.`);
-      document.getElementById('btnUpload').disabled = true;
-    } else {
-      log(`Validation OK. ${parsedRows.length} row(s) ready.`);
-      document.getElementById('btnUpload').disabled = false;
+    try {
+      parsedRows = await parseCsv(file);
+      const issues = validateRows(parsedRows);
+      if (issues.length) {
+        log('Validation issues:\n' + issues.join('\n'));
+        alert(`Found ${issues.length} validation issue(s). See log.`);
+        document.getElementById('btnUpload').disabled = false; // let them upload anyway if you prefer strict? set to true to block
+      } else {
+        log(`Validation OK. ${parsedRows.length} row(s) ready.`);
+        document.getElementById('btnUpload').disabled = false;
+      }
+    } catch (e) {
+      log('CSV parse failed → ' + (e && e.message ? e.message : e));
+      alert('CSV parse failed (see log).');
     }
   });
 
@@ -180,7 +209,7 @@
     return errs;
   }
 
-  // ===== Upload (100 items per call, concurrent workers) =====
+  // ===== Upload (100 items per call, with concurrency and retries) =====
   document.getElementById('btnUpload').addEventListener('click', uploadAll);
   document.getElementById('btnCancel').addEventListener('click', () => { cancelRequested = true; });
 
@@ -200,6 +229,7 @@
       email: r.email || undefined
     }));
 
+    // slice into 100-item chunks
     const chunks = [];
     for (let i = 0; i < items.length; i += 100) chunks.push(items.slice(i, i + 100));
 
@@ -226,16 +256,13 @@
       }
     }
 
+    // Start workers
     await Promise.all(Array.from({ length: maxConcurrency }, (_, i) => worker(i+1)));
     document.getElementById('btnCancel').disabled = true;
 
-    if (cancelRequested) {
-      log('Upload cancelled by user.'); alert('Upload cancelled.');
-    } else if (failed === 0) {
-      log('All batches uploaded successfully ✅'); alert('Upload complete!');
-    } else {
-      log('Upload completed with failures. See log for details.'); alert(`Upload finished. ${failed} batch(es) failed.`);
-    }
+    if (cancelRequested) { log('Upload cancelled by user.'); alert('Upload cancelled.'); }
+    else if (failed === 0) { log('All batches uploaded successfully ✅'); alert('Upload complete!'); }
+    else { log('Upload completed with failures. See log.'); alert(`Upload finished. ${failed} batch(es) failed.`); }
   }
 
   function updateProgress(done, total, ok, failed) {
@@ -246,7 +273,7 @@
 
   // POST one chunk with retry/backoff for 429/5xx
   async function postChunk(batchNumber, items) {
-    const url = client.basePath + '/api/v2/employeeperformance/externalmetrics/data';
+    const url = platformClient.ApiClient.instance.basePath + '/api/v2/employeeperformance/externalmetrics/data';
     const body = JSON.stringify({ items });
 
     let attempt = 0;
@@ -256,7 +283,7 @@
       const res = await fetch(url, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer ' + client.getAuthToken(),
+          'Authorization': 'Bearer ' + platformClient.ApiClient.instance.getAuthToken(),
           'Content-Type': 'application/json'
         },
         body
@@ -285,7 +312,7 @@
     el.textContent += `[${ts}] ${msg}\n`;
     el.scrollTop = el.scrollHeight;
   }
-})();
+});
 </script>
 </body>
 </html>
