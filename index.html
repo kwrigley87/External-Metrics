@@ -43,11 +43,9 @@
     </section>
 
     <div class="flex gap-2 items-center mb-6">
-      <button id="btnLogin" type="button" class="px-4 py-2 rounded bg-black text-white">Sign in</button>
+      <button id="btnLogin"  type="button" class="px-4 py-2 rounded bg-black text-white">Sign in</button>
       <button id="btnLogout" type="button" class="px-4 py-2 rounded bg-gray-200">Sign out</button>
-      <div class="ml-auto text-sm text-gray-700">
-        <span id="whoami"></span>
-      </div>
+      <div class="ml-auto text-sm text-gray-700"><span id="whoami"></span></div>
     </div>
 
     <!-- CSV -->
@@ -56,7 +54,8 @@
       <input id="csvFile" type="file" accept=".csv" class="block w-full text-sm" />
       <p class="text-xs text-gray-500 mt-1">
         Header: <code>metricId,userId,email,value,type,dateOccurred</code>.
-        <strong>type</strong>: <code>total</code> (default) or <code>cumulative</code>. Provide <em>userId</em> OR <em>email</em>, not both. Date as <code>YYYY-MM-DD</code>. :contentReference[oaicite:2]{index=2}
+        <strong>type</strong>: <code>total</code> (default) or <code>cumulative</code>.
+        Provide <em>userId</em> OR <em>email</em> (not both). Date as <code>YYYY-MM-DD</code>.
       </p>
     </section>
 
@@ -65,7 +64,7 @@
       <div>
         <label class="block text-sm font-medium mb-1">Max concurrency (1–5)</label>
         <input id="concurrency" type="number" min="1" max="5" value="3" class="w-full border rounded p-2" />
-        <p class="text-xs text-gray-500 mt-1"># of 100-row batches sent in parallel. Default 3. :contentReference[oaicite:3]{index=3}</p>
+        <p class="text-xs text-gray-500 mt-1"># of 100-row batches sent in parallel. Default 3.</p>
       </div>
       <div class="md:col-span-3 flex items-end gap-2">
         <button id="btnValidate" type="button" class="px-4 py-2 rounded bg-blue-600 text-white">Validate CSV</button>
@@ -91,37 +90,75 @@
   </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-  // Defensive: surface any runtime error in the on-page log
-  window.onerror = (msg, src, line, col, err) => {
-    const details = [msg, src, line + ':' + col, err && err.stack].filter(Boolean).join(' | ');
-    log('JS Error → ' + details);
+/* --- tiny logger that works before/after DOM is ready --- */
+function _log(msg) {
+  const ts = new Date().toISOString();
+  const line = `[${ts}] ${msg}\n`;
+  const el = document.getElementById('log');
+  if (el) { el.textContent += line; el.scrollTop = el.scrollHeight; }
+  else { console.log(line); }
+}
+
+/* --- main initializer: runs now if DOM ready, otherwise after DOMContentLoaded --- */
+(function bootstrap() {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+
+function init() {
+  _log('App initialised');
+
+  // Wire buttons immediately
+  const btnLogin   = document.getElementById('btnLogin');
+  const btnLogout  = document.getElementById('btnLogout');
+  const btnValidate= document.getElementById('btnValidate');
+  const btnUpload  = document.getElementById('btnUpload');
+  const btnCancel  = document.getElementById('btnCancel');
+
+  btnLogin.addEventListener('click', onLogin);
+  btnLogout.addEventListener('click', onLogout);
+  btnValidate.addEventListener('click', onValidate);
+  btnUpload.addEventListener('click', onUpload);
+  btnCancel.addEventListener('click', () => { state.cancelRequested = true; });
+
+  // State
+  window.state = {
+    platformAvailable: !!(window.platformClient && window.platformClient.ApiClient),
+    client: null,
+    usersApi: null,
+    authedUser: null,
+    parsedRows: [],
+    cancelRequested: false
   };
 
-  // ===== Genesys SDK presence check =====
-  if (!window.platformClient || !window.platformClient.ApiClient) {
-    log('ERROR: Genesys SDK failed to load. Check network/CSP and the script tag for the SDK.');
-    alert('Genesys SDK failed to load (see log).');
+  // If SDK is present, init it; otherwise keep CSV tools working and warn on sign-in.
+  if (state.platformAvailable) {
+    state.client   = window.platformClient.ApiClient.instance;
+    state.usersApi = new window.platformClient.UsersApi();
+  } else {
+    _log('WARNING: Genesys SDK failed to load. CSV validation will work, but Sign in/Upload will not.');
   }
 
-  const platformClient = window.platformClient;
-  const client = platformClient.ApiClient.instance;
-  const UsersApi = new platformClient.UsersApi();
-
-  // Persist region & clientId
+  // Restore persisted region/clientId
   const LS_KEYS = { region: 'extm_region', clientId: 'extm_clientId' };
-  const regionEl   = document.getElementById('region');
-  const clientEl   = document.getElementById('clientId');
-  regionEl.value   = localStorage.getItem(LS_KEYS.region)  || regionEl.value;
-  clientEl.value   = new URLSearchParams(location.search).get('clientId')
-                  || localStorage.getItem(LS_KEYS.clientId) || '';
+  const regionEl = document.getElementById('region');
+  const clientEl = document.getElementById('clientId');
+  regionEl.value = localStorage.getItem(LS_KEYS.region) || regionEl.value;
+  clientEl.value = new URLSearchParams(location.search).get('clientId')
+                || localStorage.getItem(LS_KEYS.clientId) || '';
 
-  let authedUser   = null;
-  let parsedRows   = [];
-  let cancelRequested = false;
+  // Helpful global error pipe to the on-page log
+  window.onerror = (msg, src, line, col, err) => {
+    const details = [msg, src, line + ':' + col, err && err.stack].filter(Boolean).join(' | ');
+    _log('JS Error → ' + details);
+  };
 
-  // ===== Auth (implicit grant) =====
-  async function login() {
+  async function onLogin() {
+    if (!state.platformAvailable) { alert('Genesys SDK not loaded. Check the SDK script tag / network.'); return; }
+
     const region   = regionEl.value.trim();
     const clientId = clientEl.value.trim();
     if (!clientId) return alert('Enter OAuth Client Id');
@@ -130,56 +167,110 @@ document.addEventListener('DOMContentLoaded', () => {
     localStorage.setItem(LS_KEYS.region, region);
     localStorage.setItem(LS_KEYS.clientId, clientId);
 
-    client.setEnvironment(region);
+    state.client.setEnvironment(region);
 
-    // Use a fixed redirect to avoid querystring mismatches on OAuth config
+    // Use a fixed redirect to match OAuth config exactly
     const redirectUri = `${location.origin}${location.pathname}`;
-    log('Auth starting… redirectUri=' + redirectUri);
+    _log('Auth starting… redirectUri=' + redirectUri);
 
     try {
-      await client.loginImplicitGrant(clientId, redirectUri, { state: 'ext-metrics' });
-      authedUser = await UsersApi.getUsersMe({});
-      document.getElementById('whoami').textContent = `Welcome, ${authedUser.name}`;
-      log(`Auth OK for ${authedUser.name}`);
+      await state.client.loginImplicitGrant(clientId, redirectUri, { state: 'ext-metrics' });
+      state.authedUser = await state.usersApi.getUsersMe({});
+      document.getElementById('whoami').textContent = `Welcome, ${state.authedUser.name}`;
+      _log(`Auth OK for ${state.authedUser.name}`);
     } catch (e) {
-      log('Auth FAILED → ' + (e && e.message ? e.message : e));
-      alert('Sign-in failed. Check OAuth Redirect URI in Admin > Integrations > OAuth (must match this page URL). See log.');
+      _log('Auth FAILED → ' + (e && e.message ? e.message : e));
+      alert('Sign-in failed. Ensure OAuth Redirect URI exactly matches this page URL. See log.');
     }
   }
 
-  async function logout() {
-    try { await client.logout(true); } catch {}
-    authedUser = null;
+  async function onLogout() {
+    if (!state.platformAvailable) return;
+    try { await state.client.logout(true); } catch {}
+    state.authedUser = null;
     document.getElementById('whoami').textContent = '';
-    log('Signed out');
+    _log('Signed out');
   }
 
-  document.getElementById('btnLogin').addEventListener('click', login);
-  document.getElementById('btnLogout').addEventListener('click', logout);
-
-  // ===== CSV parse & validate =====
-  document.getElementById('btnValidate').addEventListener('click', async () => {
+  async function onValidate() {
     const file = document.getElementById('csvFile').files && document.getElementById('csvFile').files[0];
     if (!file) return alert('Choose a CSV file first.');
     try {
-      parsedRows = await parseCsv(file);
-      const issues = validateRows(parsedRows);
+      state.parsedRows = await parseCsv(file);
+      const issues = validateRows(state.parsedRows);
       if (issues.length) {
-        log('Validation issues:\n' + issues.join('\n'));
+        _log('Validation issues:\n' + issues.join('\n'));
         alert(`Found ${issues.length} validation issue(s). See log.`);
-        document.getElementById('btnUpload').disabled = false; // let them upload anyway if you prefer strict? set to true to block
+        document.getElementById('btnUpload').disabled = false; // set true to block on errors
       } else {
-        log(`Validation OK. ${parsedRows.length} row(s) ready.`);
+        _log(`Validation OK. ${state.parsedRows.length} row(s) ready.`);
         document.getElementById('btnUpload').disabled = false;
       }
     } catch (e) {
-      log('CSV parse failed → ' + (e && e.message ? e.message : e));
+      _log('CSV parse failed → ' + (e && e.message ? e.message : e));
       alert('CSV parse failed (see log).');
     }
-  });
+  }
+
+  async function onUpload() {
+    if (!state.platformAvailable) return alert('Sign in first (SDK not loaded or not authenticated).');
+    if (!state.client.getAuthToken()) return alert('Please sign in first.');
+    if (!state.parsedRows.length) return alert('Validate your CSV first.');
+
+    state.cancelRequested = false;
+    document.getElementById('btnCancel').disabled = false;
+
+    const items = state.parsedRows.map(r => ({
+      metricId: r.metricId,
+      value: Number(r.value),
+      type: (r.type || 'total').toLowerCase(),
+      dateOccurred: r.dateOccurred,
+      userId: r.userId || undefined,
+      email: r.email || undefined
+    }));
+
+    const chunks = [];
+    for (let i = 0; i < items.length; i += 100) chunks.push(items.slice(i, i + 100));
+
+    const maxConcurrency = Math.min(Number(document.getElementById('concurrency').value || 3), 5);
+    let done = 0, ok = 0, failed = 0;
+
+    _log(`Starting upload: ${items.length} rows in ${chunks.length} batch(es), concurrency=${maxConcurrency}`);
+    updateProgress(0, chunks.length, 0, 0);
+
+    const queue = chunks.map((payload, idx) => ({ idx: idx + 1, payload }));
+
+    async function worker() {
+      while (queue.length && !state.cancelRequested) {
+        const job = queue.shift();
+        if (!job) break;
+        try {
+          await postChunk(job.idx, job.payload);
+          ok++; _log(`Batch ${job.idx}: OK (${job.payload.length} items)`);
+        } catch (e) {
+          failed++; _log(`Batch ${job.idx}: FAILED → ${e.message || e}`);
+        } finally {
+          done++; updateProgress(done, chunks.length, ok, failed);
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: maxConcurrency }, () => worker()));
+    document.getElementById('btnCancel').disabled = true;
+
+    if (state.cancelRequested) { _log('Upload cancelled by user.'); alert('Upload cancelled.'); }
+    else if (failed === 0)     { _log('All batches uploaded successfully ✅'); alert('Upload complete!'); }
+    else                       { _log('Upload completed with failures. See log.'); alert(`Upload finished. ${failed} batch(es) failed.`); }
+  }
+
+  function updateProgress(done, total, ok, failed) {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    document.getElementById('bar').style.width = pct + '%';
+    document.getElementById('stats').textContent = `Batches: ${done}/${total} • OK: ${ok} • Failed: ${failed}`;
+  }
 
   function parseCsv(file) {
-    log(`Parsing: ${file.name} (${Math.round(file.size/1024)} KB)`);
+    _log(`Parsing: ${file.name} (${Math.round(file.size/1024)} KB)`);
     return new Promise((resolve, reject) => {
       Papa.parse(file, {
         header: true,
@@ -209,81 +300,17 @@ document.addEventListener('DOMContentLoaded', () => {
     return errs;
   }
 
-  // ===== Upload (100 items per call, with concurrency and retries) =====
-  document.getElementById('btnUpload').addEventListener('click', uploadAll);
-  document.getElementById('btnCancel').addEventListener('click', () => { cancelRequested = true; });
-
-  async function uploadAll() {
-    if (!parsedRows.length) return alert('Validate your CSV first.');
-    if (!client.getAuthToken()) return alert('Please sign in first.');
-
-    cancelRequested = false;
-    document.getElementById('btnCancel').disabled = false;
-
-    const items = parsedRows.map(r => ({
-      metricId: r.metricId,
-      value: Number(r.value),
-      type: (r.type || 'total').toLowerCase(),
-      dateOccurred: r.dateOccurred,
-      userId: r.userId || undefined,
-      email: r.email || undefined
-    }));
-
-    // slice into 100-item chunks
-    const chunks = [];
-    for (let i = 0; i < items.length; i += 100) chunks.push(items.slice(i, i + 100));
-
-    const maxConcurrency = Math.min(Number(document.getElementById('concurrency').value || 3), 5);
-    let done = 0, ok = 0, failed = 0;
-
-    log(`Starting upload: ${items.length} rows in ${chunks.length} batch(es), concurrency=${maxConcurrency}`);
-    updateProgress(0, chunks.length, 0, 0);
-
-    const queue = chunks.map((payload, idx) => ({ idx: idx + 1, payload }));
-
-    async function worker(id) {
-      while (queue.length && !cancelRequested) {
-        const job = queue.shift();
-        if (!job) break;
-        try {
-          await postChunk(job.idx, job.payload);
-          ok++; log(`Batch ${job.idx}: OK (${job.payload.length} items)`);
-        } catch (e) {
-          failed++; log(`Batch ${job.idx}: FAILED → ${e.message || e}`);
-        } finally {
-          done++; updateProgress(done, chunks.length, ok, failed);
-        }
-      }
-    }
-
-    // Start workers
-    await Promise.all(Array.from({ length: maxConcurrency }, (_, i) => worker(i+1)));
-    document.getElementById('btnCancel').disabled = true;
-
-    if (cancelRequested) { log('Upload cancelled by user.'); alert('Upload cancelled.'); }
-    else if (failed === 0) { log('All batches uploaded successfully ✅'); alert('Upload complete!'); }
-    else { log('Upload completed with failures. See log.'); alert(`Upload finished. ${failed} batch(es) failed.`); }
-  }
-
-  function updateProgress(done, total, ok, failed) {
-    const pct = total ? Math.round((done / total) * 100) : 0;
-    document.getElementById('bar').style.width = pct + '%';
-    document.getElementById('stats').textContent = `Batches: ${done}/${total} • OK: ${ok} • Failed: ${failed}`;
-  }
-
-  // POST one chunk with retry/backoff for 429/5xx
   async function postChunk(batchNumber, items) {
-    const url = platformClient.ApiClient.instance.basePath + '/api/v2/employeeperformance/externalmetrics/data';
+    const url  = state.client.basePath + '/api/v2/employeeperformance/externalmetrics/data';
     const body = JSON.stringify({ items });
 
-    let attempt = 0;
-    const maxAttempts = 5;
+    let attempt = 0, maxAttempts = 5;
     while (true) {
       attempt++;
       const res = await fetch(url, {
         method: 'POST',
         headers: {
-          'Authorization': 'Bearer ' + platformClient.ApiClient.instance.getAuthToken(),
+          'Authorization': 'Bearer ' + state.client.getAuthToken(),
           'Content-Type': 'application/json'
         },
         body
@@ -294,7 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts) {
         const retryAfter = Number(res.headers.get('Retry-After')) || 0;
         const backoff = retryAfter ? retryAfter * 1000 : Math.min(30000, 1000 * Math.pow(2, attempt));
-        log(`Batch ${batchNumber}: attempt ${attempt} got ${res.status}. Retrying in ${Math.round(backoff/1000)}s…`);
+        _log(`Batch ${batchNumber}: attempt ${attempt} got ${res.status}. Retrying in ${Math.round(backoff/1000)}s…`);
         await new Promise(r => setTimeout(r, backoff));
         continue;
       }
@@ -304,15 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
       throw new Error(msg);
     }
   }
-
-  // ===== Utilities =====
-  function log(msg) {
-    const el = document.getElementById('log');
-    const ts = new Date().toISOString();
-    el.textContent += `[${ts}] ${msg}\n`;
-    el.scrollTop = el.scrollHeight;
-  }
-});
+}
 </script>
 </body>
 </html>
