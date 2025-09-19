@@ -6,160 +6,197 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <style>code{background:#f4f4f5;padding:.1rem .3rem;border-radius:.25rem}</style>
+  <style>
+    code{background:#f4f4f5;padding:.1rem .3rem;border-radius:.25rem}
+  </style>
 </head>
 <body class="min-h-screen bg-gray-50 text-gray-900">
   <div class="max-w-5xl mx-auto p-6">
-    <h1 class="text-2xl font-bold mb-2">External Metrics CSV Uploader</h1>
-    <p class="text-sm text-gray-600 mb-6">Uploads up to 100 rows per request, with parallel batches + retries.</p>
+    <!-- Screen 1: Login -->
+    <section id="loginView" class="w-full max-w-xl mx-auto">
+      <div class="bg-white rounded-2xl shadow p-6">
+        <h1 class="text-2xl font-bold mb-2 text-center">External Metrics Uploader</h1>
+        <p class="text-center text-gray-600 mb-6">Sign in to start uploading KPI CSVs.</p>
 
-    <!-- Auth config -->
-    <div class="grid md:grid-cols-3 gap-4 mb-4">
-      <div>
-        <label class="block text-sm font-medium mb-1">Region</label>
-        <select id="region" class="w-full border rounded p-2">
-          <option value="mypurecloud.com">US East (mypurecloud.com)</option>
-          <option value="usw2.pure.cloud" selected>US West 2 (usw2.pure.cloud)</option>
-          <option value="cac1.pure.cloud">Canada (cac1.pure.cloud)</option>
-          <option value="mypurecloud.ie">EU West (Ireland)</option>
-          <option value="euw2.pure.cloud">EU West 2 (London)</option>
-          <option value="mypurecloud.de">Germany</option>
-          <option value="apne2.pure.cloud">Tokyo</option>
-          <option value="apne1.pure.cloud">Seoul</option>
-          <option value="mypurecloud.com.au">Sydney</option>
-          <option value="sae1.pure.cloud">São Paulo</option>
-        </select>
+        <div class="grid gap-4 mb-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Region</label>
+            <select id="region" class="w-full border rounded p-2">
+              <option value="mypurecloud.com">US East (mypurecloud.com)</option>
+              <option value="usw2.pure.cloud" selected>US West 2 (usw2.pure.cloud)</option>
+              <option value="cac1.pure.cloud">Canada (cac1.pure.cloud)</option>
+              <option value="mypurecloud.ie">EU West (Ireland)</option>
+              <option value="euw2.pure.cloud">EU West 2 (London)</option>
+              <option value="mypurecloud.de">Germany</option>
+              <option value="apne2.pure.cloud">Tokyo</option>
+              <option value="apne1.pure.cloud">Seoul</option>
+              <option value="mypurecloud.com.au">Sydney</option>
+              <option value="sae1.pure.cloud">São Paulo</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">OAuth Client ID (public)</label>
+            <input id="clientId" class="w-full border rounded p-2" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+            <p class="text-xs text-gray-500 mt-1">Safe to expose. Never put a client secret in front-end code.</p>
+          </div>
+        </div>
+
+        <div class="text-center">
+          <button id="btnLogin" type="button"
+            class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded">
+            Login to Genesys Cloud
+          </button>
+        </div>
+
+        <details class="mt-4">
+          <summary class="cursor-pointer text-sm text-gray-700">Help</summary>
+          <div class="text-xs text-gray-600 mt-2">
+            Ensure your OAuth client's Redirect URI includes:
+            <code>https://kwrigley87.github.io/External-Metrics/</code>
+          </div>
+        </details>
       </div>
-      <div class="md:col-span-2">
-        <label class="block text-sm font-medium mb-1">OAuth Client ID (public)</label>
-        <input id="clientId" class="w-full border rounded p-2" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-        <p class="text-xs text-gray-500 mt-1">Client ID is safe to expose. Never put a client secret in front-end code.</p>
+    </section>
+
+    <!-- Screen 2: App -->
+    <section id="appView" class="hidden">
+      <header class="mb-4 flex items-center justify-between">
+        <h2 class="text-xl font-semibold">Upload CSV to External Metrics</h2>
+        <div id="whoami" class="text-sm text-gray-700"></div>
+      </header>
+
+      <!-- CSV -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium mb-1">CSV file</label>
+        <input id="csvFile" type="file" accept=".csv" class="block w-full text-sm" />
+        <p class="text-xs text-gray-600 mt-1">
+          Header: <code>metricId,userId,email,value,type,dateOccurred</code>.
+          Provide <em>userId</em> OR <em>email</em> (not both).
+          <strong>type</strong>: <code>total</code> (default) or <code>cumulative</code>.
+          Date: <code>YYYY-MM-DD</code>.
+        </p>
       </div>
-    </div>
 
-    <div class="flex gap-2 items-center mb-6">
-      <button id="btnLogin"  type="button" class="px-4 py-2 rounded bg-black text-white">Sign in</button>
-      <button id="btnLogout" type="button" class="px-4 py-2 rounded bg-gray-200">Sign out</button>
-      <div class="ml-auto text-sm text-gray-700"><span id="whoami"></span></div>
-    </div>
-
-    <!-- CSV -->
-    <div class="mb-4">
-      <label class="block text-sm font-medium mb-1">CSV file</label>
-      <input id="csvFile" type="file" accept=".csv" class="block w-full text-sm" />
-      <p class="text-xs text-gray-600 mt-1">
-        Header: <code>metricId,userId,email,value,type,dateOccurred</code>. Provide <em>userId</em> OR <em>email</em> (not both).
-        <strong>type</strong>: <code>total</code> (default) or <code>cumulative</code>. Date: <code>YYYY-MM-DD</code>.
-      </p>
-    </div>
-
-    <!-- Controls -->
-    <div class="grid md:grid-cols-4 gap-4 mb-3">
-      <div>
-        <label class="block text-sm font-medium mb-1">Max concurrency (1–5)</label>
-        <input id="concurrency" type="number" min="1" max="5" value="3" class="w-full border rounded p-2" />
+      <!-- Controls -->
+      <div class="grid md:grid-cols-4 gap-4 mb-3">
+        <div>
+          <label class="block text-sm font-medium mb-1">Max concurrency (1–5)</label>
+          <input id="concurrency" type="number" min="1" max="5" value="3" class="w-full border rounded p-2" />
+        </div>
+        <div class="md:col-span-3 flex items-end gap-2">
+          <button id="btnValidate" type="button"
+                  class="px-4 py-2 rounded bg-blue-600 text-white">Validate CSV</button>
+          <button id="btnUpload" type="button"
+                  class="px-4 py-2 rounded bg-green-600 text-white" disabled>Upload to Genesys</button>
+          <button id="btnCancel" type="button"
+                  class="px-4 py-2 rounded bg-gray-200" disabled>Cancel</button>
+        </div>
       </div>
-      <div class="md:col-span-3 flex items-end gap-2">
-        <button id="btnValidate" type="button" class="px-4 py-2 rounded bg-blue-600 text-white">Validate CSV</button>
-        <button id="btnUpload"   type="button" class="px-4 py-2 rounded bg-green-600 text-white" disabled>Upload to Genesys</button>
-        <button id="btnCancel"   type="button" class="px-4 py-2 rounded bg-gray-200" disabled>Cancel</button>
-      </div>
-    </div>
 
-    <!-- Progress -->
-    <div class="mb-2">
-      <div class="text-sm font-medium">Progress</div>
-      <div class="w-full bg-gray-200 rounded h-3">
-        <div id="bar" class="bg-green-500 h-3 rounded" style="width:0%"></div>
+      <!-- Progress -->
+      <div class="mb-2">
+        <div class="text-sm font-medium">Progress</div>
+        <div class="w-full bg-gray-200 rounded h-3">
+          <div id="bar" class="bg-green-500 h-3 rounded" style="width:0%"></div>
+        </div>
+        <div id="stats" class="text-xs text-gray-600 mt-1">Waiting…</div>
       </div>
-      <div id="stats" class="text-xs text-gray-600 mt-1">Waiting…</div>
-    </div>
 
-    <!-- Log -->
-    <details class="mt-3" open>
-      <summary class="cursor-pointer font-medium">Log</summary>
-      <pre id="log" class="mt-2 p-3 bg-white border rounded overflow-auto text-xs h-64"></pre>
-    </details>
+      <!-- Log -->
+      <details class="mt-3" open>
+        <summary class="cursor-pointer font-medium">Log</summary>
+        <pre id="log" class="mt-2 p-3 bg-white border rounded overflow-auto text-xs h-64"></pre>
+      </details>
+    </section>
   </div>
 
 <script>
 (() => {
-  // ===== UI refs
-  const regionEl    = document.getElementById('region');
-  const clientEl    = document.getElementById('clientId');
-  const whoamiEl    = document.getElementById('whoami');
+  // === UI refs
+  const loginView  = document.getElementById('loginView');
+  const appView    = document.getElementById('appView');
+  const regionEl   = document.getElementById('region');
+  const clientEl   = document.getElementById('clientId');
+  const whoamiEl   = document.getElementById('whoami');
+
   const btnLogin    = document.getElementById('btnLogin');
-  const btnLogout   = document.getElementById('btnLogout');
   const btnValidate = document.getElementById('btnValidate');
   const btnUpload   = document.getElementById('btnUpload');
   const btnCancel   = document.getElementById('btnCancel');
 
-  // ===== State
+  // === State
   const LS_KEYS = { region: 'extm_region', clientId: 'extm_clientId' };
   let token = null;
   let parsedRows = [];
   let cancelRequested = false;
 
-  // ===== Helpers
-  function log(msg){const el=document.getElementById('log');const ts=new Date().toISOString();el.textContent+=`[${ts}] ${msg}\n`;el.scrollTop=el.scrollHeight;}
-  function setProgress(done,total,ok,failed){const pct=total?Math.round((done/total)*100):0;document.getElementById('bar').style.width=pct+'%';document.getElementById('stats').textContent=`Batches: ${done}/${total} • OK: ${ok} • Failed: ${failed}`;}
-  function getTokenFromHash(){const hash=window.location.hash.substring(1);const params=new URLSearchParams(hash);return params.get('access_token');}
-  function clearTokenAndReload(){history.replaceState({},document.title,location.pathname+location.search);location.reload();}
-  function currentRedirectUri(){ // always the exact page URL (origin + pathname, no hash or query)
+  // === Helpers
+  const log = msg => {
+    const el = document.getElementById('log');
+    if (!el) return;
+    const ts = new Date().toISOString();
+    el.textContent += `[${ts}] ${msg}\n`;
+    el.scrollTop = el.scrollHeight;
+  };
+  const show = el => el.classList.remove('hidden');
+  const hide = el => el.classList.add('hidden');
+  const setProgress = (done,total,ok,failed) => {
+    const pct = total ? Math.round((done/total)*100) : 0;
+    document.getElementById('bar').style.width = pct + '%';
+    document.getElementById('stats').textContent = `Batches: ${done}/${total} • OK: ${ok} • Failed: ${failed}`;
+  };
+  const getTokenFromHash = () => {
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    return params.get('access_token');
+  };
+  const currentRedirectUri = () => {
     let uri = location.origin + location.pathname;
-    // ensure trailing slash (GitHub Pages repos usually end with /)
     if (!uri.endsWith('/')) uri += '/';
     return uri;
-  }
-  function buildAuthUrl(region, clientId){
+  };
+  const buildAuthUrl = (region, clientId) => {
     const url = new URL(`https://login.${region}/oauth/authorize`);
     url.searchParams.set('client_id', clientId);
     url.searchParams.set('response_type', 'token');
     url.searchParams.set('redirect_uri', currentRedirectUri());
-    // scopes are optional; most orgs ignore the scope param for implicit grant
-    // include a minimal set to mirror your other app
     url.searchParams.set('scope', 'users:readonly conversations routing:readonly quality');
-    // include state so we can restore region/clientId after redirect
-    url.searchParams.set('state', JSON.stringify({region, clientId}));
     return url.toString();
-  }
-  async function whoAmI(){
-    const region = regionEl.value;
+  };
+  const whoAmI = async () => {
+    const region = localStorage.getItem(LS_KEYS.region) || regionEl.value;
     const res = await fetch(`https://api.${region}/api/v2/users/me`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { 'Authorization': `Bearer ${token}` }
     });
     if (!res.ok) throw new Error(`users/me ${res.status}`);
     return res.json();
-  }
+  };
 
-  // ===== Wire buttons
+  // === Login flow (Screen 1)
   btnLogin.addEventListener('click', () => {
     const region   = regionEl.value.trim();
     const clientId = clientEl.value.trim();
-    if (!clientId) { alert('Enter OAuth Client ID'); return; }
+    if (!clientId) return alert('Enter OAuth Client ID');
 
-    // persist and go
     localStorage.setItem(LS_KEYS.region, region);
     localStorage.setItem(LS_KEYS.clientId, clientId);
 
     const redirectUri = currentRedirectUri();
-    log(`Redirecting to login… (region=${region}, redirect=${redirectUri})\nIf you see “OAuth client ID or redirect URI is invalid”, add this exact redirect URI to your OAuth client.`);
+    log(`Redirecting to login… (region=${region}, redirect=${redirectUri})`);
     window.location.href = buildAuthUrl(region, clientId);
   });
 
-  btnLogout.addEventListener('click', clearTokenAndReload);
-
+  // === CSV handlers (Screen 2)
   btnValidate.addEventListener('click', async () => {
     const file = document.getElementById('csvFile').files?.[0];
     if (!file) return alert('Choose a CSV file first.');
-
     try {
       parsedRows = await parseCsv(file);
       const issues = validateRows(parsedRows);
       if (issues.length) {
         log('Validation issues:\n' + issues.join('\n'));
         alert(`Found ${issues.length} validation issue(s). See log.`);
-        btnUpload.disabled = false; // set true to block on validation errors
+        btnUpload.disabled = false; // set to true to block uploads on validation errors
       } else {
         log(`Validation OK. ${parsedRows.length} row(s) ready.`);
         btnUpload.disabled = false;
@@ -173,7 +210,7 @@
   btnUpload.addEventListener('click', uploadAll);
   btnCancel.addEventListener('click', () => { cancelRequested = true; });
 
-  // ===== CSV helpers
+  // === CSV utils
   function parseCsv(file){
     log(`Parsing: ${file.name} (${Math.round(file.size/1024)} KB)`);
     return new Promise((resolve,reject)=>{
@@ -203,7 +240,7 @@
     return errs;
   }
 
-  // ===== Upload (100 per request, parallel workers + retry)
+  // === Upload (100 per request, parallel workers + retry)
   async function uploadAll(){
     if (!token) return alert('Please sign in first.');
     if (!parsedRows.length) return alert('Validate your CSV first.');
@@ -231,7 +268,7 @@
     const workers=Array.from({length:maxConcurrency},()=>worker());
 
     async function worker(){
-      const region=regionEl.value.trim();
+      const region=localStorage.getItem(LS_KEYS.region) || regionEl.value;
       while(queue.length && !cancelRequested){
         const job=queue.shift(); if(!job) break;
         try{ await postChunk(region, job.idx, job.payload); ok++; log(`Batch ${job.idx}: OK (${job.payload.length} items)`);}
@@ -272,27 +309,21 @@
     }
   }
 
-  // ===== Boot: restore inputs, parse token, show whoami
+  // === Boot: show correct screen
+  // restore fields
   regionEl.value = localStorage.getItem(LS_KEYS.region) || regionEl.value;
   clientEl.value = localStorage.getItem(LS_KEYS.clientId) || clientEl.value;
 
-  // round-trip state restore (region/clientId) after redirect
-  const stateParam = new URLSearchParams(location.search).get('state');
-  if (stateParam) {
-    try {
-      const s = JSON.parse(stateParam);
-      if (s.region)   regionEl.value = s.region;
-      if (s.clientId) clientEl.value = s.clientId;
-    } catch {}
-  }
-
   token = getTokenFromHash();
   if (token) {
+    // show App
+    hide(loginView); show(appView);
     whoAmI()
       .then(me => { whoamiEl.textContent = `Welcome, ${me.name}`; log(`Signed in as ${me.name}`); })
       .catch(() => { whoamiEl.textContent = 'Signed in'; log('Signed in (users/me check failed, continuing)'); });
   } else {
-    log('Not signed in. Click “Sign in” to authenticate.');
+    // show Login
+    show(loginView); hide(appView);
   }
 })();
 </script>
